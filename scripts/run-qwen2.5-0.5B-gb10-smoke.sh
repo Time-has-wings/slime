@@ -5,9 +5,9 @@
 # recipe.
 #
 # Prerequisites:
-#   - /root/Qwen2.5-0.5B-Instruct                    (HF checkpoint)
-#   - /root/Qwen2.5-0.5B-Instruct_torch_dist         (from tools/convert_hf_to_torch_dist.py)
-#   - /root/dapo-math-17k/dapo-math-17k.jsonl
+#   - ${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct                  (HF checkpoint)
+#   - ${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct_torch_dist       (from tools/convert_hf_to_torch_dist.py)
+#   - ${SCRIPT_DIR}/../datasets/dapo-math-17k/dapo-math-17k.jsonl
 
 set -ex
 
@@ -23,14 +23,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen2.5-0.5B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen2.5-0.5B-Instruct/
-   --ref-load /root/Qwen2.5-0.5B-Instruct_torch_dist/
-   --save /tmp/slime_smoke_save/
+   --hf-checkpoint "${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct/"
+   --ref-load "${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct_torch_dist/"
+   --save "${SCRIPT_DIR}/../checkpoints/slime_smoke_save/"
    --save-interval 9999
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data "${SCRIPT_DIR}/../datasets/dapo-math-17k/dapo-math-17k.jsonl"
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -90,16 +90,12 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats --port 6379
 
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": {
-        "PYTHONPATH": "/root/src/Megatron-LM",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1"
-     }
-   }' \
-   -- python3 train.py \
+export PYTHONPATH="/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/Megatron-LM"
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 1 \
    --colocate \

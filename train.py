@@ -7,6 +7,10 @@ from slime.utils.misc import should_run_periodic_action
 
 
 def train(args):
+    print(f'enter train', flush=True)
+    ray.init(address="auto", log_to_driver=False)
+    print(f'successfully init ray', flush=True)
+
     configure_logger()
     # allocate the GPUs
     pgs = create_placement_groups(args)
