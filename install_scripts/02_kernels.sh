@@ -1,23 +1,29 @@
 #!/bin/bash
 set -ex
 
-LOG_FILE="$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
+LOG_DIR="$(cd "$(dirname "$0")" && pwd)/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ============================================================
 # 02_kernels.sh  安装 flash-attn / APEX / Transformer Engine /
 #                torch_memory_saver 等 kernel 包
 # ============================================================
-# 前置条件: 01_sglang.sh 已跑完，conda activate slime 已执行
+# 前置条件: 01_sglang.sh 已跑完
 # 用法:     bash 02_kernels.sh
 # ============================================================
 
-export CUDA_HOME=/jizhicfs/johnnyslin/anaconda3/envs/slime
+source /jizhicfs/johnnyslin/anaconda3/etc/profile.d/conda.sh
+ENV_PREFIX="/tmp/linguangming/slime-workspace/slime_env"
+conda activate "$ENV_PREFIX"
+
+export CUDA_HOME=/tmp/linguangming/slime-workspace/slime_env
 export PATH=$CUDA_HOME/bin:$PATH
-export PATH=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/software/protoc/bin:$PATH
+export PATH=/tmp/linguangming/slime-workspace/protoc/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib:$LD_LIBRARY_PATH
 
-BASE_DIR=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace
+BASE_DIR=/tmp/linguangming/slime-workspace
 
 cd "$BASE_DIR"
 
@@ -55,4 +61,4 @@ pip install -v nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 pip install -v https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
-echo "==== 02_kernels.sh 完成 ===="
+echo "==== 02_kernels.sh 完成，日志: $LOG_FILE ===="

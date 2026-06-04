@@ -1,23 +1,29 @@
 #!/bin/bash
 set -ex
 
-LOG_FILE="$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
+LOG_DIR="$(cd "$(dirname "$0")" && pwd)/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ============================================================
 # 01_sglang.sh  克隆 sglang + 安装 + torch cu129 版本修复
 # ============================================================
-# 前置条件: 00_conda_env.sh 已跑完，conda activate slime 已执行
+# 前置条件: 00_conda_env.sh 已跑完
 # 用法:     bash 01_sglang.sh
 # ============================================================
 
+source /jizhicfs/johnnyslin/anaconda3/etc/profile.d/conda.sh
+ENV_PREFIX="/tmp/linguangming/slime-workspace/slime_env"
+conda activate "$ENV_PREFIX"
+
 # 增加一系列环境变量
-export CUDA_HOME=/jizhicfs/johnnyslin/anaconda3/envs/slime
+export CUDA_HOME=/tmp/linguangming/slime-workspace/slime_env
 export PATH=$CUDA_HOME/bin:$PATH
-export PATH=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/software/protoc/bin:$PATH
+export PATH=/tmp/linguangming/slime-workspace/protoc/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib:$LD_LIBRARY_PATH
 
-BASE_DIR=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace
+BASE_DIR=/tmp/linguangming/slime-workspace
 SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
 
 cd "$BASE_DIR"
@@ -68,4 +74,4 @@ pip install -v --force-reinstall --no-deps \
 # 验证 torch 能正常导入
 python -c "import torch; print('torch:', torch.__version__, 'cuda:', torch.version.cuda)"
 
-echo "==== 01_sglang.sh 完成 ===="
+echo "==== 01_sglang.sh 完成，日志: $LOG_FILE ===="

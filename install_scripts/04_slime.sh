@@ -1,22 +1,28 @@
 #!/bin/bash
 set -ex
 
-LOG_FILE="$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
+LOG_DIR="$(cd "$(dirname "$0")" && pwd)/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ============================================================
 # 04_slime.sh  安装 slime + int4_qat kernel + 打补丁
 # ============================================================
-# 前置条件: 03_megatron.sh 已跑完，conda activate slime 已执行
+# 前置条件: 03_megatron.sh 已跑完
 # 用法:     bash 04_slime.sh
 # ============================================================
 
-export CUDA_HOME=/jizhicfs/johnnyslin/anaconda3/envs/slime
+source /jizhicfs/johnnyslin/anaconda3/etc/profile.d/conda.sh
+ENV_PREFIX="/tmp/linguangming/slime-workspace/slime_env"
+conda activate "$ENV_PREFIX"
+
+export CUDA_HOME=/tmp/linguangming/slime-workspace/slime_env
 export PATH=$CUDA_HOME/bin:$PATH
-export PATH=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/software/protoc/bin:$PATH
+export PATH=/tmp/linguangming/slime-workspace/protoc/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib:$LD_LIBRARY_PATH
 
-BASE_DIR=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace
+BASE_DIR=/tmp/linguangming/slime-workspace
 PATCH_VERSION="latest"
 
 export SLIME_DIR="$BASE_DIR/slime"
@@ -61,4 +67,4 @@ else
   echo "megatron patch already applied or not applicable, skipping"
 fi
 
-echo "==== 04_slime.sh 完成 ===="
+echo "==== 04_slime.sh 完成，日志: $LOG_FILE ===="
