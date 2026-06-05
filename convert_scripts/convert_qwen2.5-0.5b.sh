@@ -1,5 +1,14 @@
-source scripts/models/qwen2.5-0.5B.sh
-PYTHONPATH=/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="$(dirname "$SCRIPT_DIR")"
+MEGATRON_DIR="$(dirname "$BASE_DIR")/Megatron-LM"
+
+LOGS_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOGS_DIR"
+LOG_FILE="$LOGS_DIR/convert_qwen2.5-0.5b_$(date +'%Y%m%d_%H%M%S').log"
+
+source "$BASE_DIR/scripts/models/qwen2.5-0.5B.sh"
+
+PYTHONPATH="$MEGATRON_DIR" python "$BASE_DIR/tools/convert_hf_to_torch_dist.py" \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint models/Qwen2.5-0.5B-Instruct/ \
-    --save models/Qwen2.5-0.5B-Instruct_torch_dist/
+    --hf-checkpoint "$BASE_DIR/models/Qwen2.5-0.5B-Instruct/" \
+    --save "$BASE_DIR/models/Qwen2.5-0.5B-Instruct_torch_dist/" 2>&1 | tee "$LOG_FILE"

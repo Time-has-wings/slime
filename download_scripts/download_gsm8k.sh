@@ -1,4 +1,4 @@
-base_dir="/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/slime"
+base_dir="$(cd "$(dirname "$0")/.." && pwd)"
 datasets_dir="${base_dir}/datasets"
 logs_dir="${base_dir}/download_scripts/logs"
 mkdir -p "${datasets_dir}" "${logs_dir}"
