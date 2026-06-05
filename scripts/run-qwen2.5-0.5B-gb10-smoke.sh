@@ -5,32 +5,38 @@
 # recipe.
 #
 # Prerequisites:
-#   - ${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct                  (HF checkpoint)
-#   - ${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct_torch_dist       (from tools/convert_hf_to_torch_dist.py)
-#   - ${SCRIPT_DIR}/../datasets/dapo-math-17k/dapo-math-17k.jsonl
+#   - models/Qwen2.5-0.5B-Instruct/                  (HF checkpoint, under WORKSPACE_DIR)
+#   - models/Qwen2.5-0.5B-Instruct_torch_dist/       (from tools/convert_hf_to_torch_dist.py)
+#   - datasets/dapo-math-17k/dapo-math-17k.jsonl     (under WORKSPACE_DIR)
 
 set -ex
 
-# clean any leftover ray/sglang
-pkill -9 sglang 2>/dev/null || true
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$(dirname "$WORKSPACE_DIR")/slime_env"
+
+# clean any leftover ray/sglang from this venv only
+pkill -9 -f "$VENV_DIR/.*sglang" 2>/dev/null || true
 ray stop --force 2>/dev/null || true
-pkill -9 ray python 2>/dev/null || true
+pkill -9 -f "$VENV_DIR/.*(ray|python)" 2>/dev/null || true
 sleep 2
 
 export PYTHONUNBUFFERED=1
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+mkdir -p "$WORKSPACE_DIR/logs"
+LOG_FILE="$WORKSPACE_DIR/logs/easy_run_$(date +'%Y%m%d_%H%M%S').log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[$(date)] Logging to: $LOG_FILE"
+
 source "${SCRIPT_DIR}/models/qwen2.5-0.5B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint "${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct/"
-   --ref-load "${SCRIPT_DIR}/../models/Qwen2.5-0.5B-Instruct_torch_dist/"
-   --save "${SCRIPT_DIR}/../checkpoints/slime_smoke_save/"
-   --save-interval 9999
+   --hf-checkpoint "$WORKSPACE_DIR/models/Qwen2.5-0.5B-Instruct/"
+   --ref-load "$WORKSPACE_DIR/models/Qwen2.5-0.5B-Instruct_torch_dist/"
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data "${SCRIPT_DIR}/../datasets/dapo-math-17k/dapo-math-17k.jsonl"
+   --prompt-data "$WORKSPACE_DIR/datasets/dapo-math-17k/dapo-math-17k.jsonl"
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -90,12 +96,22 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats --port 6379
+RAY_TMP_DIR="/tmp/linguangming/ray_logs"
+mkdir -p "$RAY_TMP_DIR"
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats --temp-dir="$RAY_TMP_DIR"
+rm -rf "$WORKSPACE_DIR/ray_logs"
+ln -sf "$RAY_TMP_DIR" "$WORKSPACE_DIR/ray_logs"
+echo "Ray logs linked at: $WORKSPACE_DIR/ray_logs -> $RAY_TMP_DIR"
 
-export PYTHONPATH="/apdcephfs_zwfy2_303541817/share_303541817/pkuhetu/guangming/NewWorkspace/slime-workspace/Megatron-LM"
-export CUDA_DEVICE_MAX_CONNECTIONS=1
-
-python3 train.py \
+ray job submit --address="http://127.0.0.1:8265" \
+   --runtime-env-json='{
+     "env_vars": {
+        "PYTHONPATH": "'"$(dirname "$WORKSPACE_DIR")/Megatron-LM"'",
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "LD_LIBRARY_PATH": "'"$(dirname "$WORKSPACE_DIR")/slime_env/lib64"':/lib64:/usr/lib64"
+     }
+   }' \
+   -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 1 \
    --colocate \

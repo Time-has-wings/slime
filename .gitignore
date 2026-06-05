@@ -197,3 +197,5 @@ _examples_synced/
 # added by linguangming
 datasets/
 models/
+ray_logs
+logs
