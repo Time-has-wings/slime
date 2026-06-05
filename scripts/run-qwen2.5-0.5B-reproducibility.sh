@@ -1,35 +1,47 @@
 #!/bin/bash
-
-# for rerun the task
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
+# Deterministic GRPO training script for slime (multi-GPU reproducibility).
+# Goal: run full GRPO training with deterministic settings to verify
+# training reproducibility across runs.
+#
+# Prerequisites:
+#   - models/Qwen2.5-0.5B-Instruct/                  (HF checkpoint, under WORKSPACE_DIR)
+#   - models/Qwen2.5-0.5B-Instruct_torch_dist/       (from tools/convert_hf_to_torch_dist.py)
+#   - /root/gsm8k/train.parquet                      (training data)
+#   - /root/gsm8k/test.parquet                       (evaluation data)
 
 set -ex
 
-# will prevent ray from buffering stdout/stderr
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$(dirname "$WORKSPACE_DIR")/slime_env"
+
+# clean any leftover ray/sglang from this venv only
+pkill -9 -f "$VENV_DIR/.*sglang" 2>/dev/null || true
+ray stop --force 2>/dev/null || true
+pkill -9 -f "$VENV_DIR/.*(ray|python)" 2>/dev/null || true
+sleep 2
+
 export PYTHONUNBUFFERED=1
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/scripts/models/qwen2.5-0.5B.sh"
+mkdir -p "$WORKSPACE_DIR/logs"
+LOG_FILE="$WORKSPACE_DIR/logs/reproducibility_$(date +'%Y%m%d_%H%M%S').log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[$(date)] Logging to: $LOG_FILE"
+
+source "${SCRIPT_DIR}/models/qwen2.5-0.5B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen2.5-0.5B-Instruct/
-   --ref-load /root/Qwen2.5-0.5B-Instruct_torch_dist/
+   --hf-checkpoint "$WORKSPACE_DIR/models/Qwen2.5-0.5B-Instruct/"
+   --ref-load "$WORKSPACE_DIR/models/Qwen2.5-0.5B-Instruct_torch_dist/"
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/gsm8k/train.parquet
+   --prompt-data "$WORKSPACE_DIR/datasets/gsm8k/train.parquet"
    --input-key messages
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type math
+   --rm-type deepscaler
    --num-rollout 100
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -41,7 +53,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data gsm8k /root/gsm8k/test.parquet
+   --eval-prompt-data gsm8k "$WORKSPACE_DIR/datasets/gsm8k/test.parquet"  
    --n-samples-per-eval-prompt 1
    --eval-max-response-len 1024
    --eval-top-k 1
@@ -80,11 +92,11 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
-   --wandb-host https://wandb.ai/
-   --wandb-team glm-zero
-   --wandb-project slime-dev
-   --wandb-group qwen2.5-0.5B-gsm8k-deterministic
+   # --use-wandb
+   # --wandb-host https://wandb.ai/
+   # --wandb-team glm-zero
+   # --wandb-project slime-dev
+   # --wandb-group qwen2.5-0.5B-gsm8k-deterministic
 )
 
 SGLANG_ARGS=(
@@ -108,14 +120,20 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-# launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
+RAY_TMP_DIR="/tmp/linguangming/ray_logs"
+mkdir -p "$RAY_TMP_DIR"
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats --temp-dir="$RAY_TMP_DIR"
+rm -rf "$WORKSPACE_DIR/ray_logs"
+ln -sf "$RAY_TMP_DIR" "$WORKSPACE_DIR/ray_logs"
+echo "Ray logs linked at: $WORKSPACE_DIR/ray_logs -> $RAY_TMP_DIR"
+
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "/root/Megatron-LM",
+        "PYTHONPATH": "'"$(dirname "$WORKSPACE_DIR")/Megatron-LM"'",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "LD_LIBRARY_PATH": "'"$(dirname "$WORKSPACE_DIR")/slime_env/lib64"':/lib64:/usr/lib64",
         "NCCL_ALGO": "Ring",
         "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
         "CUBLAS_WORKSPACE_CONFIG": ":4096:8"

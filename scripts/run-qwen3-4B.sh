@@ -1,16 +1,29 @@
 #!/bin/bash
 
-# for rerun the task
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
+# GRPO training script for Qwen3-4B on slime.
+#
+# Prerequisites:
+#   - models/Qwen3-4B/                  (HF checkpoint, under WORKSPACE_DIR)
+#   - models/Qwen3-4B_torch_dist/       (from tools/convert_hf_to_torch_dist.py)
+#   - datasets/dapo-math-17k/dapo-math-17k.jsonl
+#   - datasets/aime-2024/aime-2024.jsonl  (for evaluation)
 
 set -ex
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$(dirname "$WORKSPACE_DIR")/slime_env"
+
+mkdir -p "$WORKSPACE_DIR/logs"
+LOG_FILE="$WORKSPACE_DIR/logs/run-qwen3-4B_$(date +'%Y%m%d_%H%M%S').log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[$(date)] Logging to: $LOG_FILE"
+
+# clean any leftover ray/sglang from this venv only
+pkill -9 -f "$VENV_DIR/.*sglang" 2>/dev/null || true
+ray stop --force 2>/dev/null || true
+pkill -9 -f "$VENV_DIR/.*(ray|python)" 2>/dev/null || true
+sleep 2
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONUNBUFFERED=1
@@ -34,39 +47,40 @@ if [ -z "$NUM_GPUS" ] || [ "$NUM_GPUS" -le 0 ]; then
 fi
 echo "NUM_GPUS: $NUM_GPUS"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/Qwen3-4B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
-   --save-interval 20
+   --hf-checkpoint "$WORKSPACE_DIR/models/Qwen3-4B/"
+   --ref-load "$WORKSPACE_DIR/models/Qwen3-4B_torch_dist/"
+   # --load "$WORKSPACE_DIR/models/Qwen3-4B_slime/"
+   # --save "$WORKSPACE_DIR/models/Qwen3-4B_slime/"
+   # --save-interval 20
+   # --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data "$WORKSPACE_DIR/datasets/dapo-math-17k/dapo-math-17k.jsonl"
    --input-key prompt
    --label-key label
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
-   --rollout-batch-size 32
+   --num-rollout 20
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 1
 
-   --global-batch-size 256
+   --global-batch-size 128
    --balance-data
 )
 
 EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
+   --eval-interval 10
+   --eval-prompt-data aime "$WORKSPACE_DIR/datasets/aime-2024/aime-2024.jsonl@[0:10]"
+   --eval-input-key text
+   --eval-label-key label
+   --n-samples-per-eval-prompt 4
    --eval-max-response-len 16384
    --eval-top-p 1
 )
@@ -130,21 +144,23 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-# launch the master node of ray in container
+RAY_TMP_DIR="/tmp/linguangming/ray_logs"
+mkdir -p "$RAY_TMP_DIR"
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
-
-# Build the runtime environment JSON with proper variable substitution
-RUNTIME_ENV_JSON="{
-  \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
-  }
-}"
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265 --temp-dir="$RAY_TMP_DIR"
+rm -rf "$WORKSPACE_DIR/ray_logs"
+ln -sf "$RAY_TMP_DIR" "$WORKSPACE_DIR/ray_logs"
+echo "Ray logs linked at: $WORKSPACE_DIR/ray_logs -> $RAY_TMP_DIR"
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json="${RUNTIME_ENV_JSON}" \
+   --runtime-env-json='{
+     "env_vars": {
+        "PYTHONPATH": "'"$(dirname "$WORKSPACE_DIR")/Megatron-LM"'",
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "LD_LIBRARY_PATH": "'"$(dirname "$WORKSPACE_DIR")/slime_env/lib64"':/lib64:/usr/lib64",
+        "NCCL_NVLS_ENABLE": "'"${HAS_NVLINK}"'"
+     }
+   }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node ${NUM_GPUS} \
