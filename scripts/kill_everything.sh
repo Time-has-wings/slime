@@ -7,6 +7,7 @@ set -ex
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$(dirname "$WORKSPACE_DIR")/slime_env"
+RAY_TMP_DIR="/tmp/linguangming/ray_logs"
 
 echo "[$(date)] Cleaning up slime processes..."
 
@@ -17,8 +18,8 @@ sleep 1
 # 2) kill sglang router/engine by port name pattern (in case they escaped venv matching)
 pkill -9 -f "sglang.launch_server\|sglang.srt.entrypoints\|sglang.srt.managers" 2>/dev/null && echo "  killed sglang extra" || echo "  no sglang extra"
 
-# 3) stop ray (all open clusters)
-ray stop --force 2>/dev/null && echo "  ray stopped" || echo "  ray was not running"
+# 3) stop ray (only this temp-dir, won't affect other rays on this machine)
+ray stop --temp-dir "$RAY_TMP_DIR" --force 2>/dev/null && echo "  ray stopped" || echo "  ray was not running"
 sleep 2
 
 # 4) kill any lingering ray/actor/nccld processes

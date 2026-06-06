@@ -13,6 +13,8 @@ set -ex
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$(dirname "$WORKSPACE_DIR")/slime_env"
+RAY_TMP_DIR="/tmp/linguangming/ray_logs"
+mkdir -p "$RAY_TMP_DIR"
 
 mkdir -p "$WORKSPACE_DIR/logs"
 LOG_FILE="$WORKSPACE_DIR/logs/run-qwen3-4B_$(date +'%Y%m%d_%H%M%S').log"
@@ -21,7 +23,7 @@ echo "[$(date)] Logging to: $LOG_FILE"
 
 # clean any leftover ray/sglang from this venv only
 pkill -9 -f "$VENV_DIR/.*sglang" 2>/dev/null || true
-ray stop --force 2>/dev/null || true
+ray stop --temp-dir "$RAY_TMP_DIR" --force 2>/dev/null || true
 pkill -9 -f "$VENV_DIR/.*(ray|python)" 2>/dev/null || true
 sleep 2
 
@@ -144,8 +146,6 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-RAY_TMP_DIR="/tmp/linguangming/ray_logs"
-mkdir -p "$RAY_TMP_DIR"
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265 --temp-dir="$RAY_TMP_DIR"
 rm -rf "$WORKSPACE_DIR/ray_logs"
