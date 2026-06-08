@@ -63,14 +63,14 @@ class _TensorBackuperNormal(TensorBackuper):
     @torch.no_grad()
     def copy(self, *, src_tag: str, dst_tag: str):
         for name in self._backups[dst_tag]:
-            self._backups[dst_tag][name].copy_(self._backups[src_tag][name])
+            self._backups[dst_tag][name].copy_(self._backups[src_tag][name]) # GPU->CPU
 
     @torch.no_grad()
     def restore(self, tag: str) -> None:
         backup_dict = self._backups[tag]
         for name, param in self._source_getter():
             assert name in backup_dict
-            param.copy_(backup_dict[name], non_blocking=True)
+            param.copy_(backup_dict[name], non_blocking=True) # CPU -> GPU
         torch.cuda.synchronize()
 
 

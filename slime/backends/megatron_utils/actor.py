@@ -246,7 +246,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 for mm_dict in rollout_data["multimodal_train_inputs"]
             ]
 
-        if self.args.qkv_format == "bshd":
+        if self.args.qkv_format == "bshd": # 目前是thd
             # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
             max_seq_len = max(rollout_data["total_lengths"])
 
@@ -289,7 +289,7 @@ class MegatronTrainRayActor(TrainRayActor):
     def _switch_model(self, target_tag: str) -> None:
         if target_tag not in self.weights_backuper.backup_tags:
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
-        self.weights_backuper.restore(target_tag)
+        self.weights_backuper.restore(target_tag) # CPU->GPU
         self._active_model_tag = target_tag
 
     def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
@@ -395,7 +395,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.wake_up()
 
         with timer("data_preprocess"):
-            rollout_data = self._get_rollout_data(rollout_data_ref)
+            rollout_data = self._get_rollout_data(rollout_data_ref) # 处理下数据
 
         if self.role == "critic":
             result = self.train_critic(rollout_id, rollout_data)
@@ -447,11 +447,11 @@ class MegatronTrainRayActor(TrainRayActor):
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
 
         with inverse_timer("train_wait"), timer("train"):
-            if self.args.compute_advantages_and_returns:
+            if self.args.compute_advantages_and_returns: # True
                 if "ref" in self.weights_backuper.backup_tags:
                     if self.args.use_routing_replay:
                         os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
-                    self._switch_model("ref")
+                    self._switch_model("ref") # 最开始的模型
                     rollout_data.update(
                         self.compute_log_prob(
                             data_iterator,
@@ -473,7 +473,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
+                self._switch_model("old_actor" if self.args.keep_old_actor else "actor") # keep_old_actor=False
                 can_reuse_log_probs_in_loss = (
                     len(num_microbatches) == 1
                     and self.args.loss_type == "policy_loss"
@@ -488,6 +488,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 )
                 if (
                     not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
+                    # use_rollout_logprobs=False
                 ) and not can_reuse_log_probs_in_loss:
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
@@ -549,7 +550,7 @@ class MegatronTrainRayActor(TrainRayActor):
             RoutingReplay.clear_all()
 
         # update the cpu actor weight to the latest model
-        self.weights_backuper.backup("actor")
+        self.weights_backuper.backup("actor") # GPU->CPU
 
         # Update ref model if needed
         if (
