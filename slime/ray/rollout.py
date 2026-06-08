@@ -367,10 +367,10 @@ class RolloutManager:
         self.pg = pg
         self.args = args
 
-        data_source_cls = load_function(self.args.data_source_path)
+        data_source_cls = load_function(self.args.data_source_path) # 这是数据集
         self.data_source = data_source_cls(args)
 
-        self.generate_rollout = load_function(self.args.rollout_function_path)
+        self.generate_rollout = load_function(self.args.rollout_function_path) # 这是加载rollout的函数 这个path是slime.rollout.sglang_rollout.generate_rollout
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
@@ -495,7 +495,7 @@ class RolloutManager:
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
-        if self.args.debug_rollout_only:
+        if self.args.debug_rollout_only: # False
             # if debug rollout only, we don't convert samples to train data and directly return
             return
         data = self._convert_samples_to_train_data(data)
@@ -609,6 +609,7 @@ class RolloutManager:
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
+        # 目前是save_debug_rollout_data是None
         if (path_template := self.args.save_debug_rollout_data) is not None:
             path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
             logger.info(f"Save debug rollout data to {path}")
@@ -627,13 +628,13 @@ class RolloutManager:
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
     def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
-        if self.custom_reward_post_process_func is not None:
+        if self.custom_reward_post_process_func is not None: # None
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
-            and self.args.rewards_normalization
+            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] # True
+            and self.args.rewards_normalization # True
         ):
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
@@ -766,6 +767,36 @@ class RolloutManager:
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
 
+        # ── debug: per-sample length stats ──
+        n_samples = len(total_lengths)
+        n_groups = len(set(data["group_ids"]))
+        logger.info(
+            f"[DP schedule] input: {n_samples} samples, {n_groups} groups, "
+            f"dp_size={dp_size}, global_batch_size={self.args.global_batch_size}"
+        )
+        logger.info(
+            f"[DP schedule] sample lengths: min={min(total_lengths)}, max={max(total_lengths)}, "
+            f"mean={sum(total_lengths) / n_samples:.1f}, total={sum(total_lengths)}"
+        )
+        # per-sample detail (first 20 + last 10 if too many)
+        def _fmt_reward(r):
+            if isinstance(r, dict):
+                return ",".join(f"{k}={v:.4f}" for k, v in r.items())
+            return f"{r:.4f}"
+
+        sample_preview = [
+            f"  sample[{i}]: len={l}, group_id={data['group_ids'][i]}, reward={_fmt_reward(data['rewards'][i])}"
+            for i, l in enumerate(total_lengths)
+        ]
+        if n_samples <= 40:
+            logger.info(f"[DP schedule] per-sample:\n" + "\n".join(sample_preview))
+        else:
+            logger.info(
+                f"[DP schedule] per-sample (first 20 + last 10):\n"
+                + "\n".join(sample_preview[:20] + ["  ..."] + sample_preview[-10:])
+            )
+        # ── end debug ──
+
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
@@ -773,6 +804,28 @@ class RolloutManager:
             global_batch_size=self.args.global_batch_size,
             group_indices=data["group_ids"],
         )
+
+        # ── debug: per-rank summary ──
+        total_global_tokens = sum(total_lengths)
+        logger.info(
+            f"[DP schedule] num_steps={len(global_batch_sizes)}, "
+            f"num_mbs_per_step={num_microbatches}, "
+            f"global_batch_sizes={global_batch_sizes}"
+        )
+        for r in range(dp_size):
+            rank_lengths = [total_lengths[j] for j in partitions[r]]
+            rank_groups = set(data["group_ids"][j] for j in partitions[r])
+            rank_total = sum(rank_lengths)
+            pct = rank_total / total_global_tokens * 100 if total_global_tokens > 0 else 0
+            logger.info(
+                f"[DP schedule] rank {r}: {len(partitions[r])} samples, "
+                f"{len(rank_groups)} groups, "
+                f"total_tokens={rank_total} ({pct:.1f}%), "
+                f"min_len={min(rank_lengths)}, max_len={max(rank_lengths)}, "
+                f"mean_len={rank_total / len(rank_lengths):.1f}, "
+                f"num_mbs={len(micro_batch_indices[r])}"
+            )
+        # ── end debug ──
 
         # Package per-rank rollout_data
         rollout_data_refs = []
@@ -806,6 +859,21 @@ class RolloutManager:
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
+
+            # ── debug: per-rank micro-batch layout ──
+            rank_lengths = [total_lengths[j] for j in partition]
+            mb_details = []
+            for mb_i, mb_local_indices in enumerate(micro_batch_indices[r]):
+                mb_lens = [rank_lengths[idx] for idx in mb_local_indices]
+                mb_details.append(f"    mb[{mb_i}]: {len(mb_lens)} samples, "
+                                  f"total_tokens={sum(mb_lens)}, "
+                                  f"lengths={mb_lens}")
+            logger.info(
+                f"[DP schedule] rank {r} micro-batch layout ({len(micro_batch_indices[r])} mbs):\n"
+                + "\n".join(mb_details)
+            )
+            # ── end debug ──
+
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 

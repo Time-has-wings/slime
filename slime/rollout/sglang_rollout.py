@@ -40,6 +40,7 @@ _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
+    # 转换为token_id
     raw_multimodal_inputs = sample.multimodal_inputs or {}
     has_multimodal_inputs = any(value is not None for value in raw_multimodal_inputs.values())
     reuse_existing_input_ids = bool(sample.tokens) and (
@@ -93,7 +94,7 @@ class GenerateState(metaclass=SingletonMeta):
 
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
-        )
+        ) # 并发控制（最多同时跑多少个请求） sglang_server_concurrency=512 rollout_num_gpus=8 rollout_num_gpus_per_engine=2
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -106,26 +107,27 @@ class GenerateState(metaclass=SingletonMeta):
             spaces_between_special_tokens=False,
         )
 
-        if getattr(args, "sglang_enable_deterministic_inference", False):
+        if getattr(args, "sglang_enable_deterministic_inference", False): # 该值为False
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
 
         # dp rank balancing
-        self.dp_counts = [0] * (args.sglang_dp_size or 1)
+        self.dp_counts = [0] * (args.sglang_dp_size or 1) # sglang_dp_size没有这个
         self.dp_rank = 0
 
         self.reset()
 
     @contextmanager
     def dp_rank_context(self):
+        # dp_counts = [3, 2, 5, 2] -> candidates = [1, 3] 找到当前负载最小的DP rank
         candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
-        dp_rank = int(np.random.choice(candidates))
+        dp_rank = int(np.random.choice(candidates)) # 随机选择一个负载最小的DP rank来处理当前的请求
         self.dp_counts[dp_rank] += 1
         self.dp_rank = dp_rank
         try:
             yield dp_rank
         finally:
-            self.dp_counts[dp_rank] -= 1
+            self.dp_counts[dp_rank] -= 1  # 用完后负载-1
             assert self.dp_counts[dp_rank] >= 0
 
     def reset(self) -> None:
@@ -134,6 +136,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.aborted = False
 
     def submit_generate_tasks(self, samples: list[list[Sample]]) -> None:
+        # smaples的外层是prompt维度，内层是同一个prompt的N次采样
         for group in samples:
             self.pendings.add(
                 asyncio.create_task(
@@ -177,7 +180,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     }
 
     if args.use_rollout_routing_replay:
-        payload["return_routed_experts"] = True
+        payload["return_routed_experts"] = True # 还有这个s
 
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
@@ -198,7 +201,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             headers = {"X-SMG-Routing-Key": sample.session_id}
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
-        output = await post(url, payload, headers=headers)
+        output = await post(url, payload, headers=headers) # 将请求发给SGLang Router，得到生成结果和相关的meta信息
+        # 这可真是纯http
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
 
     if "output_token_logprobs" in output["meta_info"]:
@@ -274,6 +278,7 @@ async def generate_and_rm(
                 else:
                     sample = await custom_generate_func(args, sample, sampling_params)
             else:
+                # 直接看走这里就行
                 sample = await generate(args, sample, sampling_params)
 
     # for the rm that need the whole group, we will not do the rm here
@@ -317,6 +322,7 @@ async def generate_and_rm_group(
     # below preserves whichever shape each task produced, so the group is
     # ``list[Sample]`` for plain rollouts and ``list[list[Sample]]`` for
     # the fan-out case.
+    # 对同一个prompt的N条样本，并发生成response + 打分
     state = GenerateState(args)
 
     if state.aborted:
@@ -420,7 +426,7 @@ async def generate_rollout_async(
     metric_gatherer = MetricGatherer()
 
     # target_data_size is the total number of valid samples to get
-    target_data_size = args.rollout_batch_size
+    target_data_size = args.rollout_batch_size # 我设置为16 # n_samples_per_prompt是4
 
     data = []
     all_data = []
@@ -429,7 +435,7 @@ async def generate_rollout_async(
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
-            samples = data_source(args.over_sampling_batch_size)
+            samples = data_source(args.over_sampling_batch_size) # over_sampling_batch_size=16
             state.submit_generate_tasks(samples)
 
         # wait for the generation to finish

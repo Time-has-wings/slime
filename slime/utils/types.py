@@ -37,14 +37,14 @@ class Sample:
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
 
     class Status(Enum):
-        PENDING = "pending"
-        COMPLETED = "completed"
-        TRUNCATED = "truncated"
-        ABORTED = "aborted"
+        PENDING = "pending" # 还没生成
+        COMPLETED = "completed" # 正常完成
+        TRUNCATED = "truncated" # 达到max_tokens被截断
+        ABORTED = "aborted" # 致命错误被终止
         # Indicates a recoverable or non-critical failure during generation (e.g., tool call failure,
         # external API error, parsing error). Unlike ABORTED, FAILED samples may still contain partial
         # valid output and can be retried or handled gracefully.
-        FAILED = "failed"
+        FAILED = "failed" # 可恢复的错误
 
     status: Status = Status.PENDING
 
